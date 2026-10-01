@@ -25,6 +25,7 @@ The reranking helper is an optional bonus exercise and may remain unimplemented.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -53,12 +54,11 @@ class QAPair:
         retrieved_contexts: List of retrieved chunks (ORDER = retriever rank).
                             Used by the retrieval-side metrics (Task 2b).
     """
-    # TODO: define fields
-    # Hints:
-    #   context: str = ""
-    #   metadata: dict = field(default_factory=dict)
-    #   retrieved_contexts: list = field(default_factory=list)
-    pass
+    question: str
+    expected_answer: str
+    context: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
+    retrieved_contexts: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -89,12 +89,15 @@ class EvalResult:
                         (Both stay None unless retrieved chunks are supplied;
                          they are NOT part of overall_score().)
     """
-    # TODO: define fields
-    # Hints:
-    #   failure_type: str | None = None
-    #   context_precision: float | None = None
-    #   context_recall: float | None = None
-    pass
+    qa_pair: QAPair
+    actual_answer: str
+    faithfulness: float
+    relevance: float
+    completeness: float
+    passed: bool
+    failure_type: str | None = None
+    context_precision: float | None = None
+    context_recall: float | None = None
 
     def overall_score(self) -> float:
         """Compute the average of faithfulness, relevance, and completeness.
@@ -104,7 +107,7 @@ class EvalResult:
 
         TODO: Return mean of the three metric scores
         """
-        raise NotImplementedError
+        return (self.faithfulness + self.relevance + self.completeness) / 3.0
 
 
 # ---------------------------------------------------------------------------
@@ -161,8 +164,12 @@ class RAGASEvaluator:
         Returns:
             float in [0.0, 1.0] — 1.0 = fully grounded in context.
         """
-        # TODO
-        raise NotImplementedError("Implement evaluate_faithfulness")
+        answer_tokens = _tokenize(answer)
+        if not answer_tokens:
+            return 1.0
+        context_tokens = _tokenize(context)
+        score = len(answer_tokens & context_tokens) / len(answer_tokens)
+        return min(1.0, max(0.0, score))
 
     def evaluate_relevance(self, answer: str, question: str) -> float:
         """
@@ -175,8 +182,12 @@ class RAGASEvaluator:
         Returns:
             float in [0.0, 1.0]
         """
-        # TODO
-        raise NotImplementedError("Implement evaluate_relevance")
+        question_tokens = _tokenize(question)
+        if not question_tokens:
+            return 1.0
+        answer_tokens = _tokenize(answer)
+        score = len(answer_tokens & question_tokens) / len(question_tokens)
+        return min(1.0, max(0.0, score))
 
     def evaluate_completeness(self, answer: str, expected: str) -> float:
         """
@@ -189,8 +200,12 @@ class RAGASEvaluator:
         Returns:
             float in [0.0, 1.0]
         """
-        # TODO
-        raise NotImplementedError("Implement evaluate_completeness")
+        expected_tokens = _tokenize(expected)
+        if not expected_tokens:
+            return 1.0
+        answer_tokens = _tokenize(answer)
+        score = len(answer_tokens & expected_tokens) / len(expected_tokens)
+        return min(1.0, max(0.0, score))
 
     # -----------------------------------------------------------------------
     # Task 2b — Retrieval-side metrics (evaluate the GET-CONTEXT step)
@@ -211,8 +226,14 @@ class RAGASEvaluator:
 
         Low recall => retriever missed evidence the answer needs.
         """
-        # TODO
-        raise NotImplementedError("Implement evaluate_context_recall")
+        expected_tokens = _tokenize(expected)
+        if not expected_tokens:
+            return 1.0
+        retrieved_tokens: set[str] = set()
+        for chunk in contexts:
+            retrieved_tokens.update(_tokenize(chunk))
+        score = len(expected_tokens & retrieved_tokens) / len(expected_tokens)
+        return min(1.0, max(0.0, score))
 
     def evaluate_context_precision(
         self,
@@ -232,8 +253,25 @@ class RAGASEvaluator:
         Return 1.0 if expected empty; 0.0 if no chunks or none relevant.
         Reordering relevant chunks earlier (reranking) raises this score.
         """
-        # TODO
-        raise NotImplementedError("Implement evaluate_context_precision")
+        expected_tokens = _tokenize(expected)
+        if not expected_tokens:
+            return 1.0
+        if not contexts:
+            return 0.0
+
+        relevant_count = 0
+        precision_sum = 0.0
+        for rank, chunk in enumerate(contexts, start=1):
+            chunk_tokens = _tokenize(chunk)
+            relevance = len(chunk_tokens & expected_tokens) / len(expected_tokens)
+            if relevance >= relevance_threshold:
+                relevant_count += 1
+                precision_sum += relevant_count / rank
+
+        if relevant_count == 0:
+            return 0.0
+        score = precision_sum / relevant_count
+        return min(1.0, max(0.0, score))
 
     def run_full_eval(
         self,
@@ -265,8 +303,47 @@ class RAGASEvaluator:
         Returns:
             EvalResult with all fields populated.
         """
-        # TODO
-        raise NotImplementedError("Implement run_full_eval")
+        faithfulness = self.evaluate_faithfulness(answer, context)
+        relevance = self.evaluate_relevance(answer, question)
+        completeness = self.evaluate_completeness(answer, expected)
+        passed = all(
+            score >= 0.5
+            for score in (faithfulness, relevance, completeness)
+        )
+
+        failure_type = None
+        if not passed:
+            if faithfulness < 0.3:
+                failure_type = "hallucination"
+            elif relevance < 0.3:
+                failure_type = "irrelevant"
+            elif completeness < 0.3:
+                failure_type = "incomplete"
+            else:
+                failure_type = "off_topic"
+
+        context_recall = None
+        context_precision = None
+        if contexts is not None:
+            context_recall = self.evaluate_context_recall(contexts, expected)
+            context_precision = self.evaluate_context_precision(contexts, expected)
+
+        return EvalResult(
+            qa_pair=QAPair(
+                question=question,
+                expected_answer=expected,
+                context=context,
+                retrieved_contexts=contexts or [],
+            ),
+            actual_answer=answer,
+            faithfulness=faithfulness,
+            relevance=relevance,
+            completeness=completeness,
+            passed=passed,
+            failure_type=failure_type,
+            context_precision=context_precision,
+            context_recall=context_recall,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -309,8 +386,7 @@ class LLMJudge:
     """
 
     def __init__(self, judge_llm_fn: Callable[[str], str]) -> None:
-        # TODO: store judge_llm_fn
-        pass
+        self.judge_llm_fn = judge_llm_fn
 
     def score_response(
         self,
@@ -342,8 +418,49 @@ class LLMJudge:
                 "reasoning": str,               # raw LLM explanation
             }
         """
-        # TODO
-        raise NotImplementedError("Implement score_response")
+        prompt = (
+            "Evaluate the answer using the rubric below. Return a JSON object "
+            "with a 'scores' object containing one numeric score from 0 to 1 "
+            "for each criterion, plus an optional 'reasoning' string.\n"
+            f"Question: {question}\n"
+            f"Answer: {answer}\n"
+            f"Rubric: {json.dumps(rubric, ensure_ascii=False)}"
+        )
+        raw_response = self.judge_llm_fn(prompt)
+        default_scores = {criterion: 0.5 for criterion in rubric}
+        try:
+            try:
+                parsed = json.loads(raw_response)
+            except json.JSONDecodeError:
+                start = raw_response.find("{")
+                end = raw_response.rfind("}")
+                if start < 0 or end <= start:
+                    raise
+                parsed = json.loads(raw_response[start : end + 1])
+        except (json.JSONDecodeError, TypeError):
+            return {"scores": default_scores, "reasoning": raw_response}
+
+        if not isinstance(parsed, dict):
+            return {"scores": default_scores, "reasoning": raw_response}
+        raw_scores = parsed.get("scores", parsed)
+        if not isinstance(raw_scores, dict):
+            return {"scores": default_scores, "reasoning": raw_response}
+
+        scores: dict[str, float] = {}
+        for criterion in rubric:
+            value = raw_scores.get(criterion)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                scores[criterion] = 0.5
+                continue
+            normalized = float(value)
+            if 1.0 < normalized <= 5.0:
+                normalized /= 5.0
+            scores[criterion] = min(1.0, max(0.0, normalized))
+
+        reasoning = parsed.get("reasoning", raw_response)
+        if not isinstance(reasoning, str):
+            reasoning = raw_response
+        return {"scores": scores, "reasoning": reasoning}
 
     def detect_bias(self, scores_batch: list[dict[str, Any]]) -> dict[str, Any]:
         """
@@ -364,8 +481,55 @@ class LLMJudge:
                 "severity_bias":   bool,
             }
         """
-        # TODO
-        raise NotImplementedError("Implement detect_bias")
+        criterion_scores: list[float] = []
+        positional_pairs: list[tuple[float, float]] = []
+        position_keys = (
+            ("first", "second"),
+            ("response_1", "response_2"),
+            ("first_response", "second_response"),
+        )
+
+        def numeric_mean(value: Any) -> float | None:
+            if isinstance(value, bool):
+                return None
+            if isinstance(value, (int, float)):
+                return float(value)
+            if isinstance(value, dict):
+                numbers = [
+                    float(item)
+                    for item in value.values()
+                    if isinstance(item, (int, float)) and not isinstance(item, bool)
+                ]
+                return sum(numbers) / len(numbers) if numbers else None
+            return None
+
+        for item in scores_batch:
+            if not isinstance(item, dict):
+                continue
+            raw_scores = item.get("scores", item)
+            if isinstance(raw_scores, dict):
+                criterion_scores.extend(
+                    float(value)
+                    for value in raw_scores.values()
+                    if isinstance(value, (int, float)) and not isinstance(value, bool)
+                )
+                for first_key, second_key in position_keys:
+                    first_score = numeric_mean(raw_scores.get(first_key))
+                    second_score = numeric_mean(raw_scores.get(second_key))
+                    if first_score is not None and second_score is not None:
+                        positional_pairs.append((first_score, second_score))
+
+        average = (
+            sum(criterion_scores) / len(criterion_scores)
+            if criterion_scores
+            else None
+        )
+        return {
+            "positional_bias": bool(positional_pairs)
+            and all(first > second for first, second in positional_pairs),
+            "leniency_bias": average is not None and average > 0.8,
+            "severity_bias": average is not None and average < 0.3,
+        }
 
 
 # ---------------------------------------------------------------------------
