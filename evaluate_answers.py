@@ -1,8 +1,8 @@
 """Connect saved lab artifacts to the reusable evaluation core.
 
 This file deliberately contains only artifact I/O and Exercise 3.2 reporting.
-All evaluation metrics, benchmark execution, and failure analysis remain in
-``template.py``.
+All evaluation metrics, benchmark execution, and failure analysis remain in the
+completed evaluation core.
 """
 
 from __future__ import annotations
@@ -13,13 +13,22 @@ import re
 from pathlib import Path
 from typing import Any
 
-from template import (
-    BenchmarkRunner,
-    EvalResult,
-    FailureAnalyzer,
-    QAPair,
-    RAGASEvaluator,
-)
+if (Path(__file__).resolve().parent / "solution" / "solution.py").is_file():
+    from solution.solution import (
+        BenchmarkRunner,
+        EvalResult,
+        FailureAnalyzer,
+        QAPair,
+        RAGASEvaluator,
+    )
+else:
+    from template import (
+        BenchmarkRunner,
+        EvalResult,
+        FailureAnalyzer,
+        QAPair,
+        RAGASEvaluator,
+    )
 
 
 def _read_json_file(path: Path, label: str) -> dict[str, Any]:
@@ -248,7 +257,7 @@ def print_exercise_3_2(results: list[EvalResult], summary: dict[str, Any]) -> No
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Evaluate saved domain-assistant answers using the core in template.py."
+            "Evaluate saved domain-assistant answers using the completed evaluation core."
         )
     )
     parser.add_argument(
@@ -299,7 +308,7 @@ def main() -> int:
             encoding="utf-8",
         )
     except NotImplementedError as exc:
-        print(f"ERROR: Complete the required TODOs in template.py first: {exc}")
+        print(f"ERROR: Complete the required TODOs in the evaluation core first: {exc}")
         return 2
     except (AttributeError, KeyError, OSError, TypeError, ValueError) as exc:
         print(f"ERROR: {exc}")

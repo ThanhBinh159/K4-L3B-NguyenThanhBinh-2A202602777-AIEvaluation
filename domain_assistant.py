@@ -242,15 +242,15 @@ class TextGenerator(Protocol):
     def generate(self, prompt: str) -> str: ...
 
 
-class OpenAIGenerator:
+class DeepSeekGenerator:
     def __init__(self, max_output_tokens: int = 300) -> None:
-        api_key = os.getenv("OPENAI_API_KEY", "").strip()
-        self.model = os.getenv("OPENAI_MODEL", "").strip()
+        api_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
+        self.model = os.getenv("DEEPSEEK_MODEL", "").strip()
         if not api_key:
-            raise RuntimeError("OPENAI_API_KEY is missing from .env")
+            raise RuntimeError("DEEPSEEK_API_KEY is missing from .env")
         if not self.model:
-            raise RuntimeError("OPENAI_MODEL is missing from .env")
-        self.client = OpenAI(api_key=api_key)
+            raise RuntimeError("DEEPSEEK_MODEL is missing from .env")
+        self.client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
         self.max_output_tokens = max_output_tokens
 
     def generate(self, prompt: str) -> str:
@@ -259,10 +259,11 @@ class OpenAIGenerator:
             input=prompt,
             temperature=0,
             max_output_tokens=self.max_output_tokens,
+            reasoning={"effort": "none"},
         )
         answer = response.output_text.strip()
         if not answer:
-            raise RuntimeError("OpenAI returned an empty answer")
+            raise RuntimeError("DeepSeek returned an empty answer")
         return answer
 
 
@@ -299,7 +300,7 @@ class DomainAssistant:
         return cls(
             corpus_id,
             BM25Retriever(chunks),
-            generator if generator is not None else OpenAIGenerator(),
+            generator if generator is not None else DeepSeekGenerator(),
             top_k,
         )
 
